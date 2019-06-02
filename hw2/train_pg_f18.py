@@ -13,6 +13,9 @@ import time
 import inspect
 from multiprocessing import Process
 
+from itertools import accumulate
+from functools import reduce
+
 #============================================================================================#
 # Utilities
 #============================================================================================#
@@ -156,9 +159,9 @@ class Agent(object):
                                 size=self.size, 
                                 activation=tf.nn.relu, 
                                 output_activation=None)
-            sy_logstd = tf.get_varible(name='log_std', shape=[self.ac_dim], 
+            sy_logstd = tf.get_variable(name='log_std', shape=[self.ac_dim],
                 initializer=tf.constant_initializer(1.0))
-            return (sy_mean, sy_logstd)
+            return sy_mean, sy_logstd
 
     #========================================================================================#
     #                           ----------PROBLEM 2----------
@@ -190,7 +193,8 @@ class Agent(object):
         if self.discrete:
             sy_logits_na = policy_parameters
             # YOUR_CODE_HERE
-            sy_sampled_ac = tf.random.multinomial(sy_logits_na, 1)
+            sy_sampled_ac = tf.random.categorical(sy_logits_na, 1)
+            sy_sampled_ac = tf.reshape(sy_sampled_ac, [-1])
         else:
             sy_mean, sy_logstd = policy_parameters
             # YOUR_CODE_HERE
@@ -214,7 +218,7 @@ class Agent(object):
                         sy_logstd: (self.ac_dim,)
 
                 sy_ac_na: 
-                    if discrete: (batch_size,)
+                    if discrete: (batch_size)
                     if continuous: (batch_size, self.ac_dim)
 
             returns:
@@ -228,16 +232,16 @@ class Agent(object):
             sy_logits_na = policy_parameters
             # YOUR_CODE_HERE
             # sy_logits_na: (batch_size, self.ac_dim)
-            # sy_ac_na: [[0,3,4,1]] of size batch size
+            # sy_ac_na: [0,3,4,1] of size batch size
             dist = tfp.distributions.Categorical(sy_logits_na)
             sy_logprob_n = dist.log_prob(tf.reshape(sy_ac_na, [-1]))
         else:
             sy_mean, sy_logstd = policy_parameters
             # YOUR_CODE_HERE
             # sy_mean: (batch_size, self.ac_dim)
-            # sy_logstd: [[x,x,x]] of size action_dim
+            # sy_logstd: [x,x,x] of size action_dim
             # sy_ac_na: (batch_size, self, ac_dim)
-            dist = tfp.distributions.Normal(sy_mean, sy_logstd)
+            dist = tfp.distributions.MultivariateNormalDiag(loc=sy_mean, scale_diag=sy_logstd)
             sy_logprob_n = dist.log_prob(sy_ac_na)
         return sy_logprob_n
 
@@ -279,8 +283,10 @@ class Agent(object):
         #                           ----------PROBLEM 2----------
         # Loss Function and Training Operation
         #========================================================================================#
-        loss = None # YOUR CODE HERE
+        # YOUR_CODE_HERE
+        loss = -tf.reduce_mean(tf.multiply(self.sy_logprob_n, self.sy_adv_n))
         self.update_op = tf.train.AdamOptimizer(self.learning_rate).minimize(loss)
+        self.loss_op = loss
 
         #========================================================================================#
         #                           ----------PROBLEM 6----------
@@ -327,8 +333,11 @@ class Agent(object):
             #====================================================================================#
             #                           ----------PROBLEM 3----------
             #====================================================================================#
-            raise NotImplementedError
-            ac = None # YOUR CODE HERE
+            # YOUR_CODE_HERE
+            # print("================================")
+            # print(self.sess.run(self.policy_parameters, feed_dict={self.sy_ob_no: [ob]}))
+            # print("================================")
+            ac = self.sess.run(self.sy_sampled_ac, feed_dict={self.sy_ob_no: [ob]})
             ac = ac[0]
             acs.append(ac)
             ob, rew, done, _ = env.step(ac)
@@ -411,10 +420,17 @@ class Agent(object):
             like the 'ob_no' and 'ac_na' above. 
         """
         # YOUR_CODE_HERE
+        q_n = []
         if self.reward_to_go:
-            raise NotImplementedError
+            for rwd_path in re_n:
+                rwd_togo = list(accumulate(rwd_path[::-1],
+                                           lambda sum, x: sum * self.gamma + x))[::-1]
+                q_n.extend(rwd_togo)
         else:
-            raise NotImplementedError
+            for rwd_path in re_n:
+                disc_rwd = reduce(lambda sum, x: sum * self.gamma + x, rwd_path[::-1])
+                q_n.extend([disc_rwd] * len(rwd_path))
+        q_n = np.array(q_n)
         return q_n
 
     def compute_advantage(self, ob_no, q_n):
@@ -481,8 +497,7 @@ class Agent(object):
         if self.normalize_advantages:
             # On the next line, implement a trick which is known empirically to reduce variance
             # in policy gradient methods: normalize adv_n to have mean zero and std=1.
-            raise NotImplementedError
-            adv_n = None # YOUR_CODE_HERE
+            adv_n = (adv_n - np.mean(adv_n)) / np.std(adv_n) # YOUR_CODE_HERE
         return q_n, adv_n
 
     def update_parameters(self, ob_no, ac_na, q_n, adv_n):
@@ -533,8 +548,17 @@ class Agent(object):
         # and after an update, and then log them below. 
 
         # YOUR_CODE_HERE
-        raise NotImplementedError
-
+        loss_before = self.sess.run(self.loss_op, feed_dict={self.sy_ob_no: ob_no,
+                                                             self.sy_ac_na: ac_na,
+                                                             self.sy_adv_n: adv_n})
+        self.sess.run(self.update_op,feed_dict={self.sy_ob_no: ob_no,
+                                                self.sy_ac_na: ac_na,
+                                                self.sy_adv_n: adv_n})
+        loss_after = self.sess.run(self.loss_op, feed_dict={self.sy_ob_no: ob_no,
+                                                             self.sy_ac_na: ac_na,
+                                                             self.sy_adv_n: adv_n})
+        print("Loss before update: ", loss_before)
+        print("Loss after update: ", loss_after)
 
 def train_PG(
         exp_name,
