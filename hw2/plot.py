@@ -91,6 +91,7 @@ def main():
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('logdir', nargs='*')
+    parser.add_argument('--subdir', action='store_true')
     parser.add_argument('--legend', nargs='*')
     parser.add_argument('--value', default='AverageReturn', nargs='*')
     args = parser.parse_args()
@@ -107,7 +108,11 @@ def main():
             data += get_datasets(logdir, legend_title)
     else:
         for logdir in args.logdir:
-            data += get_datasets(logdir)
+            if not args.subdir:
+                data += get_datasets(logdir)
+            else:
+                for subdir in os.listdir(logdir):
+                    data += get_datasets(os.path.join(logdir, subdir))
 
     if isinstance(args.value, list):
         values = args.value
