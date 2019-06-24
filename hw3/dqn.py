@@ -6,7 +6,7 @@ import gym.spaces
 import itertools
 import numpy as np
 import random
-import tensorflow                as tf
+import tensorflow as tf
 import tensorflow.contrib.layers as layers
 from collections import namedtuple
 from dqn_utils import *
@@ -158,7 +158,24 @@ class QLearner(object):
     # Tip: use huber_loss (from dqn_utils) instead of squared error when defining self.total_error
     ######
 
-    # YOUR CODE HERE
+    def select_by_action(q_values, actions):
+      return tf.reduce_sum(q_values * tf.one_hot(actions, self.num_actions), axis=1)
+
+    sy_q_value = q_func(obs_t_float, self.num_actions, scope='q_net', reuse=False)
+    sy_target_qp1_value = q_func(obs_tp1_float, self.num_actions, scope='target_q_net', reuse=False)
+    q_func_vars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='q_net')
+    target_q_func_vars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='target_q_net')
+
+    if not double_q:
+      max_action_ind = tf.argmax(sy_target_qp1_value, axis=1)
+    else:
+      sy_qp1_value = q_func(obs_tp1_float, self.num_actions, scope='qp1_net', reuse=True)
+      max_action_ind = tf.argmax(sy_qp1_value, axis=1)
+    backup_estimate = self.rew_t_ph + (1 - self.done_mask_ph) * gamma * select_by_action(sy_target_qp1_value, max_action_ind)
+    estimate = select_by_action(sy_q_value, self.act_t_ph)
+
+    self.sy_q_value = sy_q_value
+    self.total_error = tf.reduce_mean(huber_loss(backup_estimate - estimate))
 
     ######
 
@@ -229,6 +246,22 @@ class QLearner(object):
     #####
 
     # YOUR CODE HERE
+    idx = self.replay_buffer.store_frame(self.last_obs)
+    epsilon = self.exploration.value(self.t)
+    if not self.model_initialized or random.random() < epsilon:
+      action = random.randint(0, self.num_actions-1)
+    else:
+      q_values = self.session.run(self.sy_q_value, feed_dict={self.obs_t_ph: [self.last_obs]})[0]
+      action = np.argmax(q_values)
+    obs, reward, done, info = self.env.step(action)
+    if done:
+      # done is true if state before calling env.step is terminal state;
+      # otherwise will never be able to record reward at terminal state
+      obs = self.env.reset()
+    self.last_obs = obs
+    self.replay_buffer.store_effect(idx, action=action, reward=reward, done=done)
+    self.t += 1
+
 
   def update_model(self):
     ### 3. Perform experience replay and train the network.
@@ -274,8 +307,20 @@ class QLearner(object):
       #####
 
       # YOUR CODE HERE
-
+      obs_batch, act_batch, rew_batch, next_obs_batch, done_mask = self.replay_buffer.sample(self.batch_size)
+      if not self.model_initialized:
+        initialize_interdependent_variables(self.session, tf.global_variables(),
+                                            {self.obs_t_ph: obs_batch, self.obs_tp1_ph: next_obs_batch})
+        self.model_initialized = True
+      self.session.run(self.train_fn, feed_dict={self.obs_t_ph: obs_batch,
+                                                 self.act_t_ph: act_batch,
+                                                 self.rew_t_ph: rew_batch,
+                                                 self.obs_tp1_ph: next_obs_batch,
+                                                 self.done_mask_ph: done_mask,
+                                                 self.learning_rate: self.optimizer_spec.lr_schedule.value(self.t)})
       self.num_param_updates += 1
+      if self.num_param_updates % self.target_update_freq == 0:
+        self.session.run(self.update_target_fn)
 
     self.t += 1
 
